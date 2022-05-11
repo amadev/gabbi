@@ -456,18 +456,43 @@ class HTTPTestCase(unittest.TestCase):
         if 'user-agent' not in (key.lower() for key in headers):
             headers['user-agent'] = "gabbi/%s (Python urllib3)" % __version__
 
-        try:
-            response, content = self.http.request(
-                url,
-                method=method,
-                headers=headers,
-                body=body,
-                redirect=redirect
-            )
-        except wsgi_intercept.WSGIAppError as exc:
-            # Extract and re-raise the wrapped exception.
-            six.reraise(exc.exception_type, exc.exception_value,
-                        exc.traceback)
+        if headers.get('content-type') == "application/shell-exec":
+            import subprocess
+            from urllib.parse import parse_qs
+            import json
+            params = parse_qs(body)
+            cmd = url
+            for k, v in params.items():
+                k = k.decode()
+                v = v[0].decode()
+                if k == '__ARGS':
+                    cmd += " " + v
+                else:
+                    cmd += " %s=%s" % (k, v)
+            print("shell-exec cmd:", cmd)
+            p = subprocess.run(cmd, shell=True, capture_output=True)
+            content = p.stdout.decode() + p.stderr.decode()
+            print("shell-exec res:", content)
+            if p.returncode == 0:
+                response = {"status": "200", "content-type": "application/json"}
+                content = p.stdout.decode()
+            else:
+                response = {"status": "500", "content-type": "application/json"}
+                content = {"error": p.stderr.decode()}
+                content = json.dumps(content)
+        else:
+            try:
+                response, content = self.http.request(
+                    url,
+                    method=method,
+                    headers=headers,
+                    body=body,
+                    redirect=redirect
+                )
+            except wsgi_intercept.WSGIAppError as exc:
+                # Extract and re-raise the wrapped exception.
+                six.reraise(exc.exception_type, exc.exception_value,
+                            exc.traceback)
 
         # Set headers and location attributes for follow on requests
         self.response = response
@@ -518,6 +543,9 @@ class HTTPTestCase(unittest.TestCase):
 
         method = test['method'].upper()
         headers = test['request_headers']
+
+        if headers.get('content-type') == "application/shell-exec":
+            full_url = base_url
 
         if test['data'] != '':
             body = self._test_data_to_string(
